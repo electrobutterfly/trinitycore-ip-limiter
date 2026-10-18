@@ -45,9 +45,23 @@ git clone https://github.com/electrobutterfly/trinitycore-ip-limiter.git
 
 ### Step 1 — Patch `World.h`
 
-Open `src/server/game/World/World.h` and make **three** additions.
+Open `src/server/game/World/World.h`. This file defines the `World` class, which is TrinityCore's central configuration holder. Three small additions are needed. Each one uses **Search + Insert relative to a specific anchor line** — the anchor is a line that is present in every TrinityCore 3.3.5 branch, so you don't have to worry about surrounding code that varies between versions.
 
-**1a. Add three enum values to `WorldIntConfigs`.** Search for `INT_CONFIG_VALUE_COUNT` (the terminator of the `WorldIntConfigs` enum, near the bottom of the enum), and insert the three new entries **just before** it:
+> **Use your editor's Search function** (Ctrl+F / Cmd+F) to jump to each anchor. Do not skip any of the three additions — the module will not compile if any one is missing.
+
+---
+
+#### 1a. Add three enum values to `WorldIntConfigs`
+
+The `WorldIntConfigs` enum is a numbered list. Each number is an index into an internal array. New entries must be added **at the end**, right before `INT_CONFIG_VALUE_COUNT`. Inserting them anywhere else shifts every subsequent number and silently scrambles your server's settings — this is a very common mistake.
+
+**Search for this line** (near the bottom of the `WorldIntConfigs` enum):
+
+```cpp
+    INT_CONFIG_VALUE_COUNT
+```
+
+**Insert the three new lines just above it.** So that `INT_CONFIG_VALUE_COUNT` becomes:
 
 ```cpp
     // ADDED FOR IP LIMIT MODULE
@@ -58,24 +72,95 @@ Open `src/server/game/World/World.h` and make **three** additions.
     INT_CONFIG_VALUE_COUNT
 ```
 
-> **Do not** insert them anywhere except immediately before `INT_CONFIG_VALUE_COUNT`. These are indices into `m_int_configs`, so inserting them mid-enum would shift every subsequent value and silently corrupt every other config. Placing them right before the terminator is safe.
+> **Critical:** the three entries must be **above** `INT_CONFIG_VALUE_COUNT` and **below** whatever entry currently sits right above it (the last real config entry). The `// ADDED FOR ...` and `// END ...` comment lines are optional but recommended — they make future upgrades much easier.
 
-**1b. Add the whitelist container.** In the private section of `class World` (near the bottom, after `uint32 _warnDiff;` / `time_t _warnShutdownTime;` and before `friend class debug_commandscript;`), add:
+---
+
+#### 1b. Add the whitelist container
+
+The `World` class stores everything about the server. We need to add one new private storage field — a list of whitelisted IP addresses.
+
+The `World` class ends with a `friend` declaration followed by a closing `};`. That `friend` line is your anchor.
+
+**Search for this line** (it's the very last declaration inside the `class World { ... }` block):
 
 ```cpp
-        // IP Limit Module whitelist
-        std::vector<std::string> m_ipWhitelist;
+    friend class debug_commandscript;
 ```
 
-**1c. Declare two helper methods.** In the public section of `class World`, near the other accessors (for example after `IsGuidAlert()`), add:
+**Insert the new member directly above it**, with a blank line on each side. Your file should look like this when you're done:
+
+```cpp
+        time_t _warnShutdownTime;
+
+        // IP Limit Module whitelist
+        std::vector<std::string> m_ipWhitelist;
+
+    friend class debug_commandscript;
+};
+```
+
+**Key points:**
+
+- The new line is indented with **8 spaces** (to align with `time_t _warnShutdownTime;` and the other private members above it).
+- It goes **after** the last existing private member (whatever that is in your branch — `_warnShutdownTime`, or `_guidAlertLock`, or something else) and **before** `friend class debug_commandscript;`.
+- If your branch does not have `_warnShutdownTime` (very old fork), the anchor is still the same: insert just above `friend class debug_commandscript;`.
+
+---
+
+#### 1c. Declare two helper methods
+
+The `World` class needs two public method declarations so the module can ask "is this IP whitelisted?" and "how many players come from this IP?".
+
+The anchor for this is the transition from the **public** section to the **protected** section of the class. This transition is present in every branch and always begins with:
+
+**Search for this line** (it appears roughly in the middle of the class):
+
+```cpp
+    protected:
+```
+
+Then look one line below it — you should see `void _UpdateGameTime();`. The full anchor is:
+
+```cpp
+    protected:
+        void _UpdateGameTime();
+```
+
+**Insert the two new declarations directly above `protected:`**, with a blank line on each side. Your file should look like this when you're done:
 
 ```cpp
         // IP Limit Module helper methods
         uint32 GetPlayerCountByIP(std::string const& ip);
         bool IsIPWhitelisted(std::string const& ip);
+
+    protected:
+        void _UpdateGameTime();
 ```
 
-> `GetPlayerCountByIP` is kept for backwards compatibility with older versions of the module. If you want a minimal patch, you can omit it — the module no longer calls it. `IsIPWhitelisted` is required.
+**Key points:**
+
+- The new lines are indented with **8 spaces** (to align with the public members above them).
+- `protected:` must remain **below** the new lines. Do not delete or move it.
+- Do not insert the new lines **inside** the protected section — that would make them protected instead of public, and the module couldn't call them.
+
+> **Note on `GetPlayerCountByIP`:** this method is kept for backward compatibility with earlier versions of the module. The current module does not call it — you may omit it if you prefer a minimal patch. `IsIPWhitelisted` is **required**.
+
+---
+
+#### Sanity check
+
+After all three edits, save the file. Then run this search across the entire file to confirm each change is present exactly once:
+
+```bash
+grep -c "CONFIG_IP_LIMIT_ENABLED"    src/server/game/World/World.h   # expect: 1
+grep -c "m_ipWhitelist"              src/server/game/World/World.h   # expect: 1
+grep -c "IsIPWhitelisted"            src/server/game/World/World.h   # expect: 1
+```
+
+If any count is `0`, that edit is missing — go back and re-check. If any count is `2` or more, you accidentally pasted twice; delete the duplicate.
+
+Now proceed to Step 2.
 
 ### Step 2 — Patch `World.cpp`
 
